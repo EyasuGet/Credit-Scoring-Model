@@ -8,6 +8,7 @@ This repository houses a credit risk modeling project, focusing on the developme
 
 The project adheres to a standardized structure for clarity, maintainability, and ease of collaboration:
 
+```
 credit-risk-model/
 ├── .github/workflows/ci.yml   # For CI/CD
 ├── data/                      # Raw and processed data (added to .gitignore)
@@ -30,7 +31,7 @@ credit-risk-model/
 ├── requirements.txt
 ├── .gitignore
 └── README.md
-
+```
 ---
 
 ## Credit Scoring Business Understanding
@@ -98,3 +99,17 @@ In a regulated financial context, the **interpretability of the model often take
 * **Difficulty in risk management:** Inability to understand and manage the drivers of credit risk.
 
 Therefore, **Logistic Regression with WoE often serves as a robust baseline and a preferred choice in many production credit scoring systems** due to its inherent interpretability and ease of regulatory acceptance. Complex models like Gradient Boosting might be used for internal analytical purposes, challenger models, or in scenarios where the performance gain significantly outweighs the interpretability cost and appropriate explainability techniques can be rigorously applied and validated. The optimal choice often involves a **hybrid approach**, where interpretable models are used for core decision-making and more complex models provide additional insights or serve as benchmarks.
+
+## Exploratory Data Analysis (EDA) Insights
+
+Following a comprehensive Exploratory Data Analysis (EDA) of the credit risk dataset, several crucial insights have been identified that will inform subsequent data preprocessing and model development:
+
+1.  **Absence of Explicit Missing Values:** A thorough check revealed no explicit missing values (NaNs) across any columns in the dataset. This simplifies the data cleaning process significantly, as direct imputation strategies for NaNs will not be required.
+
+2.  **Perfect Multicollinearity between 'Amount' and 'Value':** The features 'Amount' and 'Value' exhibit a perfect positive linear correlation (1.00). This strong relationship indicates redundancy, where both features convey identical information. To avoid multicollinearity and streamline the feature set, one of these columns will be dropped during feature engineering.
+
+3.  **Significant Outliers in 'Amount' and 'Value':** Both 'Amount' and 'Value' contain a substantial number of extreme outliers, as visualized in their respective box plots. These outliers could heavily skew statistical analyses and disproportionately impact model training. Robust outlier handling techniques, such as capping (winsorization) or data transformations (e.g., log transformation), will be necessary to manage their impact.
+
+4.  **Weak Linear Correlation with 'FraudResult':** The target variable, 'FraudResult' (indicating fraud), shows very weak linear correlations with all numerical features. This suggests that simple linear relationships alone are insufficient for predicting fraudulent transactions effectively. This highlights the importance of exploring non-linear patterns, leveraging categorical features, and extracting new features (e.g., from `TransactionStartTime`) to build a robust fraud detection model.
+
+5.  **Categorical Nature of 'CountryCode' and 'PricingStrategy' & Temporal Feature Potential:** While `CountryCode` and `PricingStrategy` are currently represented as numerical types, their nature as identifier codes or distinct categories suggests they should be treated as categorical features. Converting them will allow models to better capture their influence. Additionally, the `TransactionStartTime` column, currently an object type, will be parsed into a datetime format to extract valuable temporal features (e.g., hour of day, day of week, time since last transaction for a customer) which could be highly indicative of fraudulent activity.
