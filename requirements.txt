@@ -9,8 +9,6 @@ mlflow
 pytest
 joblib
 
-
-#for task 6
 fastapi
 uvicorn
 flake8
