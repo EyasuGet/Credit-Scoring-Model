@@ -1,10 +1,18 @@
+
 import pandas as pd
 import numpy as np
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler, OneHotEncoder
-from sklearn.compose import ColumnTransformer
-# from xverse import WOE
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
+import datetime 
+try:
+    from xverse import WOE
+    print("Using WOE transformer from xverse.")
+    XVERSE_WOE_AVAILABLE = True
+except ImportError:
+    print("xverse not found. A custom WOE transformer will be used instead.")
+    XVERSE_WOE_AVAILABLE = False
 
 
 class DateTimeFeatureExtractor(BaseEstimator, TransformerMixin):
@@ -21,7 +29,7 @@ class DateTimeFeatureExtractor(BaseEstimator, TransformerMixin):
     def transform(self, X):
         X_copy = X.copy()
         if self.date_column in X_copy.columns:
-            # Convert to datetime, coercing errors will turn invalid dates into NaT
+
             X_copy[self.date_column] = pd.to_datetime(X_copy[self.date_column], errors='coerce')
 
             # Extract features. Use .dt accessor, and handle NaT if any
@@ -46,7 +54,6 @@ class ColumnDropper(BaseEstimator, TransformerMixin):
         return self
 
     def transform(self, X):
-        # Use errors='ignore' to prevent errors if a column doesn't exist
         return X.drop(columns=self.columns_to_drop, errors='ignore')
 
 
@@ -65,7 +72,6 @@ class OutlierCapper(BaseEstimator, TransformerMixin):
 
     def fit(self, X, y=None):
         if self.columns is None:
-            # If no columns specified, apply to all numerical columns
             self.columns = X.select_dtypes(include=np.number).columns.tolist()
 
         for col in self.columns:
@@ -88,13 +94,13 @@ class OutlierCapper(BaseEstimator, TransformerMixin):
 class CustomerAggregator(BaseEstimator, TransformerMixin):
     """
     Aggregates transaction data to a customer-level DataFrame.
-    Calculates aggregate numerical features and a customer-level fraud target.
+    Calculates aggregate numerical features.
+    The fraud target (if original) is NOT determined here as we're using a proxy.
     Also merges static categorical customer-related features.
     """
-    def __init__(self, customer_id_col='CustomerId', amount_col='Amount', fraud_col='FraudResult'):
+    def __init__(self, customer_id_col='CustomerId', amount_col='Amount'): # Removed fraud_col as it's now proxy
         self.customer_id_col = customer_id_col
         self.amount_col = amount_col
-        self.fraud_col = fraud_col
 
     def fit(self, X, y=None):
         return self
@@ -105,21 +111,17 @@ class CustomerAggregator(BaseEstimator, TransformerMixin):
             total_transaction_amount=(self.amount_col, 'sum'),
             average_transaction_amount=(self.amount_col, 'mean'),
             transaction_count=(self.amount_col, 'count'),
-            std_transaction_amount=(self.amount_col, 'std'),
-            # Define customer-level target: 1 if any transaction was fraudulent, 0 otherwise
-            customer_fraudulent=(self.fraud_col, 'max')
+            std_transaction_amount=(self.amount_col, 'std')
         ).reset_index()
 
         # Handle potential NaNs in std_transaction_amount if a customer only has one transaction
         customer_df['std_transaction_amount'] = customer_df['std_transaction_amount'].fillna(0)
 
         # Merge relevant original customer-level features that are static per customer
-        # We assume these features (like CountryCode, ProductCategory) are consistent for a customer.
-        # Taking the first unique value for these categorical features.
         static_customer_features = [
             'CountryCode', 'CurrencyCode', 'ProviderId', 'ProductId',
             'ProductCategory', 'ChannelId', 'PricingStrategy',
-            'TransactionHour', 'TransactionDay', 'TransactionMonth', 'TransactionYear' # Extracted temporal features
+            'TransactionHour', 'TransactionDay', 'TransactionMonth', 'TransactionYear'
         ]
         
         # Filter for only existing columns in X
@@ -140,11 +142,11 @@ class CustomWOETransformer(BaseEstimator, TransformerMixin):
     
     Includes capping of WoE values to prevent -inf or +inf.
     """
-    def __init__(self, features=None, target_column='customer_fraudulent', numerical_bins=10, woe_cap=20):
+    def __init__(self, features=None, target_column='is_high_risk', numerical_bins=10, woe_cap=20):
         self.features = features
         self.target_column = target_column
         self.numerical_bins = numerical_bins
-        self.woe_cap = woe_cap # Cap for WoE values to prevent infinity
+        self.woe_cap = woe_cap 
         self.woe_maps = {}
         self.iv_values = {}
         self.feature_is_numeric = {}
@@ -152,16 +154,13 @@ class CustomWOETransformer(BaseEstimator, TransformerMixin):
 
     def fit(self, X, y=None):
         if self.features is None:
-            # If features are not specified, use all object/category columns
             self.features = X.select_dtypes(include=['object', 'category', 'int64', 'float64']).columns.tolist()
-            # Remove target column if it accidentally gets included
             if self.target_column in self.features:
                 self.features.remove(self.target_column)
 
         if y is None:
             raise ValueError("Target variable 'y' must be provided for WOE transformer fitting.")
 
-        # Align X and y indices
         X = X.reset_index(drop=True)
         y = pd.Series(y).reset_index(drop=True)
 
@@ -171,74 +170,59 @@ class CustomWOETransformer(BaseEstimator, TransformerMixin):
                 continue
 
             temp_df = pd.DataFrame({col: X[col], 'target': y})
-            temp_df['target'] = temp_df['target'].astype(int) # Ensure target is int (0 or 1)
+            temp_df['target'] = temp_df['target'].astype(int) 
 
             if pd.api.types.is_numeric_dtype(temp_df[col]):
                 self.feature_is_numeric[col] = True
-                # Bin numerical columns
                 try:
-                    # Drop NaNs before qcut, as qcut doesn't handle them
                     temp_df_no_nan = temp_df.dropna(subset=[col])
-                    # Ensure bin labels match the unique bin numbers generated by qcut
                     temp_df_no_nan['binned_col'], self.numerical_bin_edges[col] = pd.qcut(
                         temp_df_no_nan[col], q=self.numerical_bins, labels=False, duplicates='drop', retbins=True
                     )
-                    # Merge binned_col back to original temp_df
                     temp_df = temp_df.merge(
                         temp_df_no_nan[['binned_col']], left_index=True, right_index=True, how='left'
                     )
                 except Exception as e:
                     print(f"Warning: pd.qcut failed for numerical column '{col}' ({e}). Falling back to pd.cut.")
-                    # Fallback to cut if qcut fails (e.g., too few unique values, or all same value)
                     try:
-                        # Ensure bins parameter is not too high for very few unique values
                         n_unique = temp_df[col].nunique()
                         effective_bins = min(self.numerical_bins, n_unique)
-                        if effective_bins == 0: # Handle case where all values are NaN or only one unique value
-                            temp_df['binned_col'] = np.nan # No meaningful binning
+                        if effective_bins == 0:
+                            temp_df['binned_col'] = np.nan
                         else:
                             temp_df['binned_col'], self.numerical_bin_edges[col] = pd.cut(
                                 temp_df[col], bins=effective_bins, labels=False, include_lowest=True, duplicates='drop', retbins=True
                             )
                     except Exception as e_cut:
                         print(f"Error: pd.cut also failed for numerical column '{col}' ({e_cut}). Column will be skipped for WOE.")
-                        self.feature_is_numeric[col] = False # Mark as not successfully binned/WOE'd
-                        continue # Skip to next feature
+                        self.feature_is_numeric[col] = False
+                        continue
 
                 group_col = 'binned_col'
             else:
                 self.feature_is_numeric[col] = False
                 group_col = col
 
-            # Calculate WoE and IV
-            # Group by the binned/original category and count good (0) and bad (1) outcomes
             grouped = temp_df.groupby(group_col)['target'].agg(
                 total_count='count',
                 bad_count=lambda x: (x == 1).sum(),
                 good_count=lambda x: (x == 0).sum()
             ).reset_index()
 
-            # Calculate overall good/bad counts for denominator
             total_bad = grouped['bad_count'].sum()
             total_good = grouped['good_count'].sum()
 
-            # Handle cases where good/bad counts are zero to avoid division by zero or log(0)
-            epsilon = 1e-6 # Small constant to avoid division by zero or log(0)
+            epsilon = 1e-6
             
             grouped['bad_rate'] = grouped['bad_count'] / (total_bad + epsilon)
             grouped['good_rate'] = grouped['good_count'] / (total_good + epsilon)
 
-            # Calculate WoE
             grouped['woe'] = np.log((grouped['bad_rate'] + epsilon) / (grouped['good_rate'] + epsilon))
-            
-            # Cap WoE values to prevent -inf or +inf
             grouped['woe'] = np.clip(grouped['woe'], -self.woe_cap, self.woe_cap)
 
-            # Calculate IV (Information Value)
             grouped['iv_contribution'] = (grouped['bad_rate'] - grouped['good_rate']) * grouped['woe']
             self.iv_values[col] = grouped['iv_contribution'].sum()
             
-            # Store the mapping from original category/bin to WoE value
             self.woe_maps[col] = grouped.set_index(group_col)['woe'].to_dict()
 
         return self
@@ -247,129 +231,231 @@ class CustomWOETransformer(BaseEstimator, TransformerMixin):
         X_copy = X.copy()
         for col in self.features:
             if col not in X_copy.columns:
-                continue # Column not in DataFrame, skip
+                continue
 
-            if col in self.woe_maps: # Check if the column was successfully fitted for WOE
+            if col in self.woe_maps:
                 if self.feature_is_numeric.get(col, False):
-                    # For numerical columns, apply the same binning as in fit before mapping
                     if col not in self.numerical_bin_edges:
-                        # If bin edges not found (e.g., binning failed during fit), handle gracefully
-                        X_copy[col] = 0 # Default to 0 or another suitable value
+                        X_copy[col] = 0
                         continue
                     
-                    # Ensure the bin edges are correctly used for pd.cut
-                    # pd.cut requires actual bin edges
                     binned_col_series = pd.cut(
                         X_copy[col], bins=self.numerical_bin_edges[col], labels=False,
                         include_lowest=True, right=True, duplicates='drop'
                     )
-                    # Map the binned values to their WOE values
                     X_copy[col] = binned_col_series.map(self.woe_maps[col])
                 else:
-                    # For categorical columns, map using the stored woe_map
                     X_copy[col] = X_copy[col].map(self.woe_maps[col])
                 
-                X_copy[col] = X_copy[col].fillna(0) # Filling NaNs (unseen categories/bins) with 0 or a sensible default
+                X_copy[col] = X_copy[col].fillna(0)
             else:
-                # If column was not fitted (e.g., due to errors during binning/WOE calculation),
-                # convert it to a neutral numerical value (e.g., 0) if it's not already.
                 if pd.api.types.is_numeric_dtype(X_copy[col]):
-                    X_copy[col] = X_copy[col].fillna(0) # Fill any original NaNs
+                    X_copy[col] = X_copy[col].fillna(0)
                 else:
-                    X_copy[col] = 0 # Assign 0 if it's an object and wasn't transformed
+                    X_copy[col] = 0
 
         return X_copy
 
+# --- Start of Proxy Target Engineering Classes (Moved from src/proxy_target_engineering.py) ---
+class RFMCalculator:
+    """
+    Calculates Recency, Frequency, and Monetary (RFM) metrics for customers
+    from raw transaction data.
+    """
+    def __init__(self, customer_id_col='CustomerId', transaction_time_col='TransactionStartTime', amount_col='Amount'):
+        self.customer_id_col = customer_id_col
+        self.transaction_time_col = transaction_time_col
+        self.amount_col = amount_col
 
-def process_data(df_raw: pd.DataFrame, target_column: str = 'FraudResult') -> pd.DataFrame:
+    def calculate(self, df_raw: pd.DataFrame, snapshot_date: datetime.datetime = None) -> pd.DataFrame:
+        """
+        Calculates RFM metrics.
+        :param df_raw: The raw transactions DataFrame.
+        :param snapshot_date: The date to calculate Recency against. If None, uses one day after max transaction date.
+        :return: DataFrame with CustomerId and RFM values.
+        """
+        df_rfm = df_raw.copy()
+
+        # 1. Convert TransactionStartTime to datetime objects
+        df_rfm[self.transaction_time_col] = pd.to_datetime(df_rfm[self.transaction_time_col], errors='coerce')
+
+        # Drop rows where transaction_time_col could not be parsed
+        df_rfm = df_rfm.dropna(subset=[self.transaction_time_col])
+
+        if df_rfm.empty:
+            raise ValueError("DataFrame is empty after dropping invalid transaction times. Cannot calculate RFM.")
+
+        # 2. Define a snapshot date if not provided
+        if snapshot_date is None:
+            # Use one day after the latest transaction as the snapshot date
+            snapshot_date = df_rfm[self.transaction_time_col].max() + datetime.timedelta(days=1)
+        
+        print(f"Using snapshot date for RFM calculation: {snapshot_date}")
+
+        # Group by customer and calculate RFM components
+        rfm_table = df_rfm.groupby(self.customer_id_col).agg(
+            # Recency: Days since last transaction
+            Recency=(self.transaction_time_col, lambda date: (snapshot_date - date.max()).days),
+            # Frequency: Number of transactions
+            Frequency=(self.customer_id_col, 'count'),
+            # Monetary: Sum of transaction amounts
+            Monetary=(self.amount_col, 'sum')
+        ).reset_index()
+
+        # Handle cases where Recency might be negative or very small if snapshot_date is too close
+        rfm_table['Recency'] = rfm_table['Recency'].apply(lambda x: max(x, 1)) # Ensure Recency is at least 1
+
+        return rfm_table
+
+
+class CustomerSegmenter:
+    """
+    Segments customers using K-Means clustering on RFM metrics and assigns a 'high-risk' label.
+    """
+    def __init__(self, n_clusters=3, random_state=42, customer_id_col='CustomerId'):
+        self.n_clusters = n_clusters
+        self.random_state = random_state
+        self.kmeans_model = None
+        self.scaler = None
+        self.cluster_centroids = None
+        self.high_risk_cluster_label = None
+        self.customer_id_col = customer_id_col
+
+    def segment(self, rfm_df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Performs K-Means clustering on RFM data and identifies the high-risk cluster.
+        :param rfm_df: DataFrame with CustomerId, Recency, Frequency, Monetary columns.
+        :return: DataFrame with CustomerId and 'is_high_risk' binary label.
+        """
+        rfm_data = rfm_df[['Recency', 'Frequency', 'Monetary']].copy()
+        
+        rfm_data['Recency_log'] = np.log1p(rfm_data['Recency'])
+        rfm_data['Frequency_log'] = np.log1p(rfm_data['Frequency'])
+        rfm_data['Monetary_log'] = np.log1p(rfm_data['Monetary'])
+        
+        rfm_processed = rfm_data[['Recency_log', 'Frequency_log', 'Monetary_log']]
+
+        self.scaler = StandardScaler()
+        rfm_scaled = self.scaler.fit_transform(rfm_processed)
+        rfm_scaled_df = pd.DataFrame(rfm_scaled, columns=rfm_processed.columns, index=rfm_processed.index)
+
+        self.kmeans_model = KMeans(n_clusters=self.n_clusters, random_state=self.random_state, n_init=10)
+        rfm_df['Cluster'] = self.kmeans_model.fit_predict(rfm_scaled_df)
+
+        scaled_centroids = self.kmeans_model.cluster_centers_
+        self.cluster_centroids = pd.DataFrame(self.scaler.inverse_transform(scaled_centroids), 
+                                                columns=rfm_processed.columns)
+        
+        cluster_scores = scaled_centroids[:, 0] - scaled_centroids[:, 1] - scaled_centroids[:, 2]
+        self.high_risk_cluster_label = np.argmax(cluster_scores)
+
+        print("\nK-Means Cluster Centroids (Inverse Transformed to Original Scale):")
+        print(self.cluster_centroids)
+        print(f"\nIdentified High-Risk Cluster Label: {self.high_risk_cluster_label}")
+
+        rfm_df['is_high_risk'] = (rfm_df['Cluster'] == self.high_risk_cluster_label).astype(int)
+
+        return rfm_df[[self.customer_id_col, 'is_high_risk']]
+
+
+def get_proxy_target(df_raw: pd.DataFrame) -> pd.DataFrame:
+    """
+    Main function to orchestrate the proxy target variable engineering.
+    Calculates RFM, clusters customers, and assigns the 'is_high_risk' label.
+    :param df_raw: The raw transactions DataFrame.
+    :return: DataFrame with CustomerId and 'is_high_risk' binary label.
+    """
+    print("\n--- Task 4: Proxy Target Variable Engineering ---")
+    
+    rfm_calculator = RFMCalculator()
+    rfm_df = rfm_calculator.calculate(df_raw)
+    print("\nRFM Calculation Complete. Sample RFM Data:")
+    print(rfm_df.head())
+
+    customer_segmenter = CustomerSegmenter(n_clusters=3, random_state=42, customer_id_col=rfm_calculator.customer_id_col)
+    high_risk_df = customer_segmenter.segment(rfm_df)
+    
+    print("\nHigh-Risk Label Assignment Complete. Sample High-Risk Data:")
+    print(high_risk_df.head())
+    print("\nHigh-Risk Cluster Distribution:")
+    print(high_risk_df['is_high_risk'].value_counts())
+
+    return high_risk_df
+# --- End of Proxy Target Engineering Classes ---
+
+
+def process_data(df_raw: pd.DataFrame) -> pd.DataFrame:
     """
     Orchestrates the entire data processing pipeline from raw transaction data
-    to a model-ready customer-level DataFrame.
+    to a model-ready customer-level DataFrame with a proxy target.
     """
     if df_raw is None:
         print("Raw DataFrame is None. Cannot process data.")
         return None
 
-    # Step 1: Initial Transaction-Level Preprocessing
-    print("Step 1: Initial Transaction-Level Preprocessing (DateTime Extraction, Column Dropping)...")
+    print("\nStep 1: Generating Proxy Target Variable ('is_high_risk')...")
+    high_risk_customers_df = get_proxy_target(df_raw.copy())
+    print("Proxy target generation complete. Shape:", high_risk_customers_df.shape)
 
-    # Define columns to drop at the transaction level
-    # 'Value' is dropped due to perfect multicollinearity with 'Amount'.
-    # ID columns are dropped as they are high cardinality and not direct features after aggregation.
+    print("\nStep 2: Initial Transaction-Level Preprocessing (DateTime Extraction, Column Dropping)...")
+
     transaction_level_cols_to_drop = [
-        'Value', 'TransactionId', 'BatchId', 'AccountId', 'SubscriptionId'
+        'Value', 'TransactionId', 'BatchId', 'AccountId', 'SubscriptionId', 'FraudResult'
     ]
 
-    # Pre-aggregation pipeline (transaction-level transformations)
     pre_agg_pipeline = Pipeline([
         ('datetime_extractor', DateTimeFeatureExtractor(date_column='TransactionStartTime')),
         ('column_dropper_initial', ColumnDropper(columns_to_drop=transaction_level_cols_to_drop))
     ])
 
-    df_preprocessed = pre_agg_pipeline.fit_transform(df_raw.copy()) # Use a copy to avoid modifying original df_raw
+    df_preprocessed = pre_agg_pipeline.fit_transform(df_raw.copy())
     print("Initial preprocessing complete. Shape:", df_preprocessed.shape)
 
+    print("\nStep 3: Aggregating data to Customer-Level and merging proxy target...")
+    customer_aggregator = CustomerAggregator(customer_id_col='CustomerId', amount_col='Amount')
+    X_customer = customer_aggregator.fit_transform(df_preprocessed)
+    print("Customer-level aggregation complete. Shape:", X_customer.shape)
 
-    # Step 2: Aggregate to Customer Level
-    print("\nStep 2: Aggregating data to Customer-Level and creating customer-level target...")
-    # CustomerAggregator handles the aggregation and merges static customer features
-    customer_aggregator = CustomerAggregator(fraud_col=target_column)
-    df_customer_level = customer_aggregator.fit_transform(df_preprocessed)
-    print("Customer-level aggregation complete. Shape:", df_customer_level.shape)
-
-    # Separate features (X) and target (y)
-    y_customer = df_customer_level['customer_fraudulent']
-    # 'CustomerId' is dropped from X as it's an identifier, not a feature for the model
-    X_customer = df_customer_level.drop(columns=['customer_fraudulent', 'CustomerId'])
-
-
-    # Step 3: Outlier Capping on Numerical Features
-    print("\nStep 3: Handling Outliers on Numerical Features...")
-    # Identify numerical features after aggregation (and temporal feature extraction)
-    numerical_features_after_agg = X_customer.select_dtypes(include=np.number).columns.tolist()
+    X_processed = pd.merge(X_customer, high_risk_customers_df, on='CustomerId', how='left')
     
-    # Exclude features like 'TransactionMonth', 'TransactionDay', 'TransactionHour', 'TransactionYear' from capping
-    # as they represent cyclical time points and outliers might not be appropriate to cap.
+    y_final = X_processed['is_high_risk']
+    X_final = X_processed.drop(columns=['is_high_risk', 'CustomerId']) 
+
+    print("\nStep 4: Handling Outliers on Numerical Features...")
+    numerical_features_after_agg = X_final.select_dtypes(include=np.number).columns.tolist()
+    
     cappable_numerical_features = [
         col for col in numerical_features_after_agg
         if col not in ['TransactionHour', 'TransactionDay', 'TransactionMonth', 'TransactionYear']
     ]
 
     outlier_capper = OutlierCapper(columns=cappable_numerical_features)
-    X_customer_capped = outlier_capper.fit_transform(X_customer)
+    X_final_capped = outlier_capper.fit_transform(X_final)
     print("Outlier capping complete.")
 
-
-    # Step 4: WOE Transformation for Categorical Features (and binned numerical if desired)
-    print("\nStep 4: Applying WOE Transformation to Categorical Features...")
-    # Identify categorical features for WOE, including those initially numeric but treated as categorical
-    categorical_features_for_woe = X_customer_capped.select_dtypes(include='object').columns.tolist()
+    print("\nStep 5: Applying WOE Transformation to Categorical Features...")
+    categorical_features_for_woe = X_final_capped.select_dtypes(include='object').columns.tolist()
     
-    # Add numerical features like CountryCode, PricingStrategy for WOE transformation
     for col in ['CountryCode', 'PricingStrategy']:
-        if col in X_customer_capped.columns and col not in categorical_features_for_woe:
+        if col in X_final_capped.columns and col not in categorical_features_for_woe:
             categorical_features_for_woe.append(col)
 
     if XVERSE_WOE_AVAILABLE:
-        # xverse WOE expects a DataFrame and target. It transforms the original columns in place.
-        woe_transformer_xverse = WOE(col_names=categorical_features_for_woe, df=X_customer_capped, target_column=y_customer.name)
-        woe_transformer_xverse.fit() # Fit will populate the object with maps
-        X_customer_woe = woe_transformer_xverse.transform(X_customer_capped) # Transform will return the new DataFrame with WoE values
+        woe_transformer_xverse = WOE(col_names=categorical_features_for_woe, df=X_final_capped, target_column=y_final.name)
+        woe_transformer_xverse.fit()
+        X_final_woe = woe_transformer_xverse.transform(X_final_capped)
 
-        # Get IV values from xverse (usually an attribute after fit)
         print("Information Value (IV) for xverse WoE transformed features:")
-        # xverse stores iv_values as a dict of DataFrames, check its structure
         for col, iv_df in woe_transformer_xverse.iv_values.items():
             if 'IV' in iv_df.columns:
-                print(f"  {col}: {iv_df['IV'].iloc[0]:.4f}") # Assuming IV is in the first row of 'IV' column
+                print(f"  {col}: {iv_df['IV'].iloc[0]:.4f}")
             else:
                  print(f"  {col}: IV calculation not directly available or in a different format from xverse output.")
 
     else:
-        # Use CustomWOETransformer if xverse is not available
-        woe_transformer_custom = CustomWOETransformer(features=categorical_features_for_woe, target_column='customer_fraudulent')
-        woe_transformer_custom.fit(X_customer_capped, y_customer)
-        X_customer_woe = woe_transformer_custom.transform(X_customer_capped)
+        woe_transformer_custom = CustomWOETransformer(features=categorical_features_for_woe, target_column='is_high_risk')
+        woe_transformer_custom.fit(X_final_capped, y_final)
+        X_final_woe = woe_transformer_custom.transform(X_final_capped)
         
         print("Information Value (IV) for Custom WoE transformed features:")
         for col, iv in woe_transformer_custom.iv_values.items():
@@ -377,72 +463,65 @@ def process_data(df_raw: pd.DataFrame, target_column: str = 'FraudResult') -> pd
 
     print("WOE transformation complete.")
 
-
-    # Step 5: Final Scaling of all Numerical Features
-    print("\nStep 5: Scaling all Numerical Features (including WoE transformed features)...")
-    # All features should now be numerical (original numerical + WoE transformed)
-    # Ensure no non-finite values are present before scaling
-    X_customer_woe_numeric = X_customer_woe.select_dtypes(include=np.number)
+    print("\nStep 6: Scaling all Numerical Features (including WoE transformed features)...")
+    X_final_woe_numeric = X_final_woe.select_dtypes(include=np.number)
     
-    # Check for infinities or NaNs one last time before scaling
-    if not np.isfinite(X_customer_woe_numeric).all().all():
+    if not np.isfinite(X_final_woe_numeric).all().all():
         print("Warning: Non-finite values detected after WOE transformation. Attempting to clean before scaling.")
-        # Replace inf with large finite number, NaN with mean/median or 0
-        X_customer_woe_numeric = X_customer_woe_numeric.replace([np.inf, -np.inf], np.nan) # Replace inf with NaN first
-        X_customer_woe_numeric = X_customer_woe_numeric.fillna(0) # Fill NaNs with 0 (or mean/median if appropriate)
+        X_final_woe_numeric = X_final_woe_numeric.replace([np.inf, -np.inf], np.nan)
+        X_final_woe_numeric = X_final_woe_numeric.fillna(0)
 
 
-    final_features_for_scaling = X_customer_woe_numeric.columns.tolist()
+    final_features_for_scaling = X_final_woe_numeric.columns.tolist()
 
     scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X_customer_woe_numeric[final_features_for_scaling])
+    X_scaled = scaler.fit_transform(X_final_woe_numeric[final_features_for_scaling])
     
-    # Create a DataFrame from the scaled data, preserving column names and index
-    X_processed = pd.DataFrame(X_scaled, columns=final_features_for_scaling, index=X_customer_woe.index)
+    X_processed_final = pd.DataFrame(X_scaled, columns=final_features_for_scaling, index=X_final_woe.index)
     
-    # Re-attach the target variable
-    X_processed['customer_fraudulent'] = y_customer.values # Ensure alignment of index/values
+    X_processed_final['is_high_risk'] = y_final.values
 
-    print("Scaling complete. Data is now model-ready.")
+    print("Scaling complete. Data is now model-ready with proxy target.")
 
-    return X_processed
+    return X_processed_final
 
-# Example usage (for testing within the script or in a notebook)
 if __name__ == '__main__':
-    # Create a dummy DataFrame for demonstration
-    # This simulates your raw data structure based on df.info() and df.head()
     data = {
-        'TransactionId': ['T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'T8', 'T9', 'T10'],
-        'BatchId': ['B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'B9', 'B10'],
-        'AccountId': ['A1', 'A1', 'A2', 'A2', 'A3', 'A3', 'A4', 'A4', 'A5', 'A5'],
-        'SubscriptionId': ['S1', 'S1', 'S2', 'S2', 'S3', 'S3', 'S4', 'S4', 'S5', 'S5'],
-        'CustomerId': ['C1', 'C1', 'C2', 'C2', 'C3', 'C3', 'C4', 'C4', 'C5', 'C5'],
-        'CurrencyCode': ['USD', 'USD', 'EUR', 'USD', 'EUR', 'GBP', 'USD', 'EUR', 'USD', 'GBP'],
-        'CountryCode': [1, 1, 2, 1, 2, 3, 1, 2, 1, 3], # Numerical but should be treated categorical
-        'ProviderId': ['P1', 'P1', 'P2', 'P1', 'P2', 'P3', 'P1', 'P2', 'P1', 'P3'],
-        'ProductId': ['ProdA', 'ProdA', 'ProdB', 'ProdA', 'ProdB', 'ProdC', 'ProdA', 'ProdB', 'ProdA', 'ProdC'],
-        'ProductCategory': ['CatX', 'CatX', 'CatY', 'CatX', 'CatY', 'CatZ', 'CatX', 'CatY', 'CatX', 'CatZ'],
-        'ChannelId': ['Ch1', 'Ch1', 'Ch2', 'Ch1', 'Ch2', 'Ch3', 'Ch1', 'Ch2', 'Ch1', 'Ch3'],
-        'Amount': [100.5, 200.0, 50.0, 15000.0, 75.0, 300.0, 120.0, 60.0, 180.0, 350.0], # High outlier for C2 (15000)
-        'Value': [100.5, 200.0, 50.0, 15000.0, 75.0, 300.0, 120.0, 60.0, 180.0, 350.0], # Identical to Amount
+        'TransactionId': ['T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'T8', 'T9', 'T10', 'T11', 'T12'],
+        'BatchId': ['B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'B9', 'B10', 'B11', 'B12'],
+        'AccountId': ['A1', 'A1', 'A2', 'A2', 'A3', 'A3', 'A4', 'A4', 'A5', 'A5', 'A1', 'A2'],
+        'SubscriptionId': ['S1', 'S1', 'S2', 'S2', 'S3', 'S3', 'S4', 'S4', 'S5', 'S5', 'S1', 'S2'],
+        'CustomerId': ['C1', 'C1', 'C2', 'C2', 'C3', 'C3', 'C4', 'C4', 'C5', 'C5', 'C1', 'C2'],
+        'CurrencyCode': ['USD', 'USD', 'EUR', 'USD', 'EUR', 'GBP', 'USD', 'EUR', 'USD', 'GBP', 'USD', 'EUR'],
+        'CountryCode': [1, 1, 2, 1, 2, 3, 1, 2, 1, 3, 1, 2],
+        'ProviderId': ['P1', 'P1', 'P2', 'P1', 'P2', 'P3', 'P1', 'P2', 'P1', 'P3', 'P1', 'P2'],
+        'ProductId': ['ProdA', 'ProdA', 'ProdB', 'ProdA', 'ProdB', 'ProdC', 'ProdA', 'ProdB', 'ProdA', 'ProdC', 'ProdA', 'ProdB'],
+        'ProductCategory': ['CatX', 'CatX', 'CatY', 'CatX', 'CatY', 'CatZ', 'CatX', 'CatY', 'CatX', 'CatZ', 'CatX', 'CatY'],
+        'ChannelId': ['Ch1', 'Ch1', 'Ch2', 'Ch1', 'Ch2', 'Ch3', 'Ch1', 'Ch2', 'Ch1', 'Ch3', 'Ch1', 'Ch2'],
+        'Amount': [100.5, 200.0, 50.0, 15000.0, 75.0, 300.0, 120.0, 60.0, 180.0, 350.0, 110.0, 80.0],
+        'Value': [100.5, 200.0, 50.0, 15000.0, 75.0, 300.0, 120.0, 60.0, 180.0, 350.0, 110.0, 80.0],
         'TransactionStartTime': [
-            '2023-01-01 10:00:00', '2023-01-01 11:30:00', '2023-01-02 14:00:00', # C1, C2
-            '2023-01-03 09:00:00', '2023-01-03 16:00:00', '2023-01-04 10:00:00', # C2, C3, C3
-            '2023-01-05 12:00:00', '2023-01-05 13:00:00', '2023-01-06 17:00:00', '2023-01-06 18:00:00' # C4, C4, C5, C5
+            '2023-01-01 10:00:00', '2023-01-05 11:30:00', # C1: Recent, Avg F, High M
+            '2022-03-10 14:00:00', '2022-03-15 09:00:00', # C2: Old, Low F, Low M (potential high risk)
+            '2023-05-01 16:00:00', '2023-05-05 10:00:00', # C3: Recent, Avg F, Avg M
+            '2023-06-01 12:00:00', '2023-06-02 13:00:00', # C4: Very Recent, High F, Avg M
+            '2022-01-01 17:00:00', '2022-01-05 18:00:00', # C5: Very Old, Low F, Low M (potential high risk)
+            '2023-01-06 09:00:00', # C1 additional, makes C1 higher F and M
+            '2022-03-16 14:00:00'  # C2 additional, makes C2 higher F
         ],
-        'PricingStrategy': [1, 1, 2, 1, 2, 3, 1, 2, 1, 3], # Numerical but should be treated categorical
-        'FraudResult': [0, 0, 0, 1, 0, 0, 0, 0, 0, 0] # C2 has a fraudulent transaction (Amount=15000)
+        'PricingStrategy': [1, 1, 2, 1, 2, 3, 1, 2, 1, 3, 1, 2],
+        'FraudResult': [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0] # Original FraudResult is now removed and replaced by proxy
     }
     dummy_df = pd.DataFrame(data)
 
-    print("--- Running data processing with dummy data ---")
-    processed_df = process_data(dummy_df.copy(), target_column='FraudResult') # Pass the original target column name
+    print("--- Running data processing with dummy data (with proxy target) ---")
+    processed_df = process_data(dummy_df.copy())
     if processed_df is not None:
-        print("\n--- Processed Data (first 5 rows) ---")
+        print("\n--- Final Processed Data (first 5 rows) ---")
         print(processed_df.head())
-        print("\n--- Processed Data Info ---")
+        print("\n--- Final Processed Data Info ---")
         processed_df.info()
-        print("\n--- Processed Data Describe ---")
+        print("\n--- Final Processed Data Describe ---")
         print(processed_df.describe())
-        print("\nUnique values in customer_fraudulent (target):", processed_df['customer_fraudulent'].unique())
-
+        print("\nUnique values in is_high_risk (new target):", processed_df['is_high_risk'].unique())
+        print("Value counts for is_high_risk:\n", processed_df['is_high_risk'].value_counts())
