@@ -1,3 +1,4 @@
+
 import os
 import pandas as pd
 from fastapi import FastAPI, HTTPException
@@ -9,10 +10,10 @@ from src.data_processing import process_data
 from src.api.pydantic_models import PredictionRequest, PredictionResponse, TransactionInput
 
 # --- Set MLflow Tracking URI explicitly and early for the API ---
-project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+project_root = "/home/eyuleo/Documents/kifya/Credit-Scoring-Model"
 mlruns_path = os.path.join(project_root, "mlruns")
 
-mlflow.set_tracking_uri("file:./mlruns")
+mlflow.set_tracking_uri(f"file://{mlruns_path}")
 os.environ["MLFLOW_TRACKING_URI"] = f"file://{mlruns_path}" 
 print(f"MLflow Tracking URI set to: {mlflow.get_tracking_uri()}")
 
@@ -24,11 +25,13 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# --- MLflow Model Loading ---
 MLFLOW_MODEL_NAME = "CreditRiskProxyModel"
-MLFLOW_MODEL_VERSION = "latest" 
+MLFLOW_RUN_ID_FOR_MODEL = "743f17d1fbc24b79817859e655f9e291"
+MLFLOW_ARTIFACT_PATH = "model" 
 
-model_version_str = f"{MLFLOW_MODEL_NAME}/{MLFLOW_MODEL_VERSION}" 
+# Construct the direct artifact URI
+model_uri_direct = f"runs:/{MLFLOW_RUN_ID_FOR_MODEL}/artifacts/{MLFLOW_ARTIFACT_PATH}"
+model_version_str = f"Direct Load from Run {MLFLOW_RUN_ID_FOR_MODEL}" # For logging purposes
 
 model = None
 
@@ -36,15 +39,15 @@ model = None
 @app.on_event("startup")
 async def load_model():
     """
-    Load the MLflow model from the registry when the FastAPI application starts up.
+    Load the MLflow model from the registry using a direct artifact URI.
     """
     global model
     print(f"Loading model: {model_version_str} from MLflow Model Registry...")
     try:
-        model = mlflow.pyfunc.load_model(model_uri=f"models:/{model_version_str}")
-        print(f"Model {model_version_str} loaded successfully.")
+        model = mlflow.pyfunc.load_model(model_uri=model_uri_direct)
+        print(f"Model from {model_uri_direct} loaded successfully.")
     except Exception as e:
-        print(f"Error loading model {model_version_str}: {e}")
+        print(f"Error loading model from {model_uri_direct}: {e}")
         raise RuntimeError(f"Failed to load MLflow model: {e}")
 
 @app.get("/health", summary="Health Check", response_model=dict)
@@ -68,6 +71,7 @@ async def predict_credit_risk(request: PredictionRequest):
 
     raw_transactions_data = [t.dict() for t in request.transactions]
     df_raw_input = pd.DataFrame(raw_transactions_data)
+
     if 'CustomerId' not in df_raw_input.columns or df_raw_input['CustomerId'].nunique() != 1:
         raise HTTPException(
             status_code=400,
@@ -102,4 +106,3 @@ async def predict_credit_risk(request: PredictionRequest):
         is_high_risk_label=is_high_risk_label,
         model_version=model_version_str
     )
-
