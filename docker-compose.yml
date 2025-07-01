@@ -1,0 +1,26 @@
+version: '3.8' # Specify the Docker Compose file format version
+
+services:
+  credit-risk-api: # Define a service named 'credit-risk-api'
+    build: . # Build the Docker image from the Dockerfile in the current directory (project root)
+    ports:
+      - "8000:8000" # Map port 8000 on the host to port 8000 in the container
+    volumes:
+      # Mount the local mlruns directory into the container.
+      # This is crucial for the API to access the MLflow tracking data and registered models.
+      # This ensures persistence of MLflow data outside the container.
+      - /home/eyuleo/Documents/kifya/Credit-Scoring-Model:/home/eyuleo/Documents/kifya/Credit-Scoring-Model
+      
+    # Optional: If you want to see code changes reflected without rebuilding the image
+    # and without using --reload in uvicorn (which is not ideal for production)
+    # - ./src:/app/src
+    environment:
+      # Explicitly set MLFLOW_TRACKING_URI, though it's also in Dockerfile,
+      # this ensures consistency and can override if needed.
+      # - MLFLOW_TRACKING_URI=file:///app/mlruns
+      # - PYTHONPATH=/app # Ensure /app is in Python path inside the container
+        - MLFLOW_TRACKING_URI=file:///home/eyuleo/Documents/kifya/Credit-Scoring-Model/mlruns
+        - PYTHONPATH=/home/eyuleo/Documents/kifya/Credit-Scoring-Model
+    command: ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    restart: on-failure # Automatically restart the container if it exits with a non-zero status
+

@@ -1,0 +1,36 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main 
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest 
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12' 
+
+    - name: Install Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        # Install the project in editable mode so imports like 'src.data_processing' work
+        # This is equivalent to 'pip install -e .' but explicitly handles the src dir
+        export PYTHONPATH=$GITHUB_WORKSPACE:$PYTHONPATH
+        echo "PYTHONPATH=$PYTHONPATH" >> $GITHUB_ENV # Set for subsequent steps
+
+    - name: Run Code Linter (Flake8)
+      run: |
+        flake8 src/ tests/ # Run flake8 on src and tests directories
+
+    - name: Run Unit Tests (Pytest)
+      run: |
+        pytest tests/ # Run pytest on the tests directory
+

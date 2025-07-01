@@ -1,2 +1,42 @@
 data/
 venv/
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+.mypy_cache/
+.pytest_cache/
+
+# MLflow
+mlruns/
+mlruns.db
+mlruns.sqlite
+mlruns.bak
+
+# Data
+data/raw/
+data/processed/
+*.csv
+*.xlsx
+*.parquet
+
+# Docker
+!Dockerfile
+!docker-compose.yml
+.dockerignore
+.env
+
+# IDEs
+.vscode/
+.idea/
+
+# Operating System
+.DS_Store
+Thumbs.db
