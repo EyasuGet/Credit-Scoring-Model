@@ -1,4 +1,3 @@
-
 import os
 import pandas as pd
 from fastapi import FastAPI, HTTPException
@@ -6,7 +5,11 @@ from pydantic import BaseModel, Field
 import mlflow
 import mlflow.pyfunc
 import joblib
+import tempfile
+import shutil
+
 from src.data_processing import process_data
+
 from src.api.pydantic_models import PredictionRequest, PredictionResponse, TransactionInput
 
 # --- Set MLflow Tracking URI explicitly and early for the API ---
@@ -26,28 +29,65 @@ app = FastAPI(
 )
 
 MLFLOW_MODEL_NAME = "CreditRiskProxyModel"
-MLFLOW_RUN_ID_FOR_MODEL = "743f17d1fbc24b79817859e655f9e291"
-MLFLOW_ARTIFACT_PATH = "model" 
+MLFLOW_RUN_ID_FOR_MODEL = "6fd7c6e772984b50992c4c245fdd2406"
+MLFLOW_ARTIFACT_PATH = "" 
 
-# Construct the direct artifact URI
-model_uri_direct = f"runs:/{MLFLOW_RUN_ID_FOR_MODEL}/artifacts/{MLFLOW_ARTIFACT_PATH}"
-model_version_str = f"Direct Load from Run {MLFLOW_RUN_ID_FOR_MODEL}" # For logging purposes
+try:
+    client = mlflow.tracking.MlflowClient()
+    run = client.get_run(MLFLOW_RUN_ID_FOR_MODEL)
+    experiment_id = run.info.experiment_id
+except Exception as e:
+    print(f"Could not retrieve experiment ID for run {MLFLOW_RUN_ID_FOR_MODEL}: {e}")
+    print("Falling back to a more direct path construction, assuming default MLflow structure.")
 
+    experiment_dirs = [d for d in os.listdir(mlruns_path) if os.path.isdir(os.path.join(mlruns_path, d)) and d.isdigit()]
+    if experiment_dirs:
+
+        experiment_id = experiment_dirs[0]
+        print(f"Heuristically determined experiment ID: {experiment_id}")
+    else:
+        raise RuntimeError("Could not determine MLflow experiment ID. Ensure mlruns structure is standard.")
+
+
+# Construct the full absolute path to model.pkl
+# This path must be valid *inside the Docker container*
+# which means it must match the mounted host path.
+# absolute_model_pkl_path = os.path.join(
+#     mlruns_path,
+#     experiment_id,
+#     MLFLOW_RUN_ID_FOR_MODEL,
+#     "artifacts",
+#     MLFLOW_ARTIFACT_PATH, # This is now ""
+#     "model.pkl" # The actual pickled model file name
+# )
+
+# model_version_str = f"Direct PKL Load from {MLFLOW_RUN_ID_FOR_MODEL}"
+absolute_model_pkl_path = "/home/eyuleo/Documents/kifya/Credit-Scoring-Model/mlruns/820322135837684092/models/m-3d81bc9bd96a4d2b85b32ad107fdeded/artifacts/model.pkl"
+model_version_str = "Direct PKL Load from registered model m-3d81bc9bd96a4d2b85b32ad107fdeded"
+
+
+# Global variable to hold the loaded model
 model = None
 
 
 @app.on_event("startup")
 async def load_model():
     """
-    Load the MLflow model from the registry using a direct artifact URI.
+    Load the MLflow model by directly loading the model.pkl file.
+    This bypasses MLflow's artifact resolution mechanism for problematic environments.
     """
     global model
-    print(f"Loading model: {model_version_str} from MLflow Model Registry...")
+    print(f"Loading model: {model_version_str} from {absolute_model_pkl_path}...")
     try:
-        model = mlflow.pyfunc.load_model(model_uri=model_uri_direct)
-        print(f"Model from {model_uri_direct} loaded successfully.")
+        if not os.path.exists(absolute_model_pkl_path):
+            raise FileNotFoundError(f"Model PKL file not found at: {absolute_model_pkl_path}")
+            
+        # Load the model directly using joblib
+        model = joblib.load(absolute_model_pkl_path)
+        
+        print(f"Model from {absolute_model_pkl_path} loaded successfully.")
     except Exception as e:
-        print(f"Error loading model from {model_uri_direct}: {e}")
+        print(f"Error loading model from {absolute_model_pkl_path}: {e}")
         raise RuntimeError(f"Failed to load MLflow model: {e}")
 
 @app.get("/health", summary="Health Check", response_model=dict)
