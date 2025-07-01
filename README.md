@@ -130,3 +130,15 @@ The data processing pipeline (`src/data_processing.py`) has been developed to tr
 
 ---
 
+## 4. Proxy Target Variable Engineering
+
+Since the raw data lacked a direct "credit risk" or "default" label, a proxy target variable named `is_high_risk` has been programmatically engineered. This variable identifies "disengaged" customers who are considered high-risk.
+
+**The process involves:**
+
+- **RFM Metrics Calculation:** For each CustomerId, Recency (days since last transaction), Frequency (number of transactions), and Monetary (total transaction amount) values are calculated. A dynamic snapshot_date is used for consistency.
+- **Customer Clustering (K-Means):** K-Means clustering is applied to the log-transformed and scaled RFM features to segment customers into 3 distinct groups. A random_state ensures reproducibility.
+- **High-Risk Label Assignment:** The cluster representing the least engaged customers (typically characterized by high Recency, low Frequency, and low Monetary values) is identified as the "high-risk" segment. Customers in this cluster are assigned `is_high_risk = 1`, while others are assigned 0.
+- **Integration:** This `is_high_risk` column is then merged back into the main processed dataset, serving as the target variable for model training.
+
+---
