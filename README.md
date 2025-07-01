@@ -142,3 +142,19 @@ Since the raw data lacked a direct "credit risk" or "default" label, a proxy tar
 - **Integration:** This `is_high_risk` column is then merged back into the main processed dataset, serving as the target variable for model training.
 
 ---
+
+## 5. Model Training and Tracking
+
+A structured model training process has been established, incorporating multiple models, hyperparameter tuning, and experiment tracking with MLflow.
+
+- **Data Splitting:** The processed customer-level data is split into training and testing sets (80% train, 20% test) using stratified sampling to maintain class proportions, especially important for the imbalanced `is_high_risk` target.
+- **Model Selection:**
+    - *Logistic Regression*: Chosen for its interpretability, with hyperparameters tuned using GridSearchCV.
+    - *Random Forest Classifier*: A more complex, high-performance ensemble model, with hyperparameters tuned using RandomizedSearchCV.
+- **Model Training and Evaluation:** Both models are trained on the training data. Performance is rigorously assessed on the test set using key metrics: Accuracy, Precision, Recall, F1-Score, and ROC-AUC. Confusion matrices and classification reports provide detailed insights.
+- **MLflow Tracking:** All experiments, including model parameters, evaluation metrics, and the trained models themselves, are logged to MLflow. This enables comprehensive experiment tracking, comparison, and reproducibility.
+- **Model Registration:** The best-performing model (based on ROC-AUC score) is identified and registered in the MLflow Model Registry. This creates a versioned, centralized repository for the production-ready model.
+- **Transformer Persistence:** Crucially, all fitted data transformation components (RFM scaler, KMeans model, outlier capper, WOE transformer, final scaler, and feature column order) are saved as artifacts within the MLflow run of the best model. This ensures that the entire preprocessing pipeline can be consistently reproduced and applied during prediction.
+
+---
+
