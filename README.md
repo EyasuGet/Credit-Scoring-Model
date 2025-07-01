@@ -34,7 +34,7 @@ credit-risk-model/
 ```
 ---
 
-## Credit Scoring Business Understanding
+## 1. Credit Scoring Business Understanding
 
 Credit scoring models are vital tools in the financial industry, enabling lenders to assess the creditworthiness of borrowers and manage credit risk effectively. This section delves into key considerations for developing such a model, particularly within a regulated environment.
 
@@ -100,7 +100,7 @@ In a regulated financial context, the **interpretability of the model often take
 
 Therefore, **Logistic Regression with WoE often serves as a robust baseline and a preferred choice in many production credit scoring systems** due to its inherent interpretability and ease of regulatory acceptance. Complex models like Gradient Boosting might be used for internal analytical purposes, challenger models, or in scenarios where the performance gain significantly outweighs the interpretability cost and appropriate explainability techniques can be rigorously applied and validated. The optimal choice often involves a **hybrid approach**, where interpretable models are used for core decision-making and more complex models provide additional insights or serve as benchmarks.
 
-## Exploratory Data Analysis (EDA) Insights
+## 2.  Exploratory Data Analysis (EDA) Insights
 
 Following a comprehensive Exploratory Data Analysis (EDA) of the credit risk dataset, several crucial insights have been identified that will inform subsequent data preprocessing and model development:
 
@@ -113,3 +113,20 @@ Following a comprehensive Exploratory Data Analysis (EDA) of the credit risk dat
 4.  **Weak Linear Correlation with 'FraudResult':** The target variable, 'FraudResult' (indicating fraud), shows very weak linear correlations with all numerical features. This suggests that simple linear relationships alone are insufficient for predicting fraudulent transactions effectively. This highlights the importance of exploring non-linear patterns, leveraging categorical features, and extracting new features (e.g., from `TransactionStartTime`) to build a robust fraud detection model.
 
 5.  **Categorical Nature of 'CountryCode' and 'PricingStrategy' & Temporal Feature Potential:** While `CountryCode` and `PricingStrategy` are currently represented as numerical types, their nature as identifier codes or distinct categories suggests they should be treated as categorical features. Converting them will allow models to better capture their influence. Additionally, the `TransactionStartTime` column, currently an object type, will be parsed into a datetime format to extract valuable temporal features (e.g., hour of day, day of week, time since last transaction for a customer) which could be highly indicative of fraudulent activity.
+
+## 3. Feature Engineering Progress
+
+The data processing pipeline (`src/data_processing.py`) has been developed to transform raw transaction data into a model-ready format. This script is designed to be robust, automated, and reproducible.
+
+**Key feature engineering steps implemented include:**
+
+- **DateTime Feature Extraction:** From TransactionStartTime, features like TransactionHour, TransactionDay, TransactionMonth, and TransactionYear are extracted.
+- **Column Dropping:** Redundant columns (Value) and high-cardinality identifiers (TransactionId, BatchId, AccountId, SubscriptionId, FraudResult - as it's replaced by a proxy) are removed.
+- **Customer-Level Aggregation:** Transaction-level data is aggregated to the CustomerId level, creating features such as total_transaction_amount, average_transaction_amount, transaction_count, and std_transaction_amount.
+- **Outlier Capping:** Outliers in key numerical aggregate features are capped using a percentile-based method to prevent undue influence on the model.
+- **Weight of Evidence (WoE) Transformation:** Categorical features (including CountryCode, PricingStrategy, and extracted temporal features which are treated as categorical) are transformed using WoE. This converts them into numerical values based on their predictive power for the target, making them suitable for interpretable models like Logistic Regression.
+- **Numerical Feature Scaling:** All final numerical features (including WoE-transformed ones) are standardized using StandardScaler to ensure they are on a comparable scale.
+- **Prediction Pipeline (`process_single_customer_data`):** A dedicated function (`process_single_customer_data`) has been implemented to apply the fitted transformers and processing logic to new, single-customer transaction data for real-time prediction.
+
+---
+
