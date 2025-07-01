@@ -92,4 +92,19 @@ class PredictionRequest(BaseModel):
             }
         }
 
+class PredictionResponse(BaseModel):
+    customer_id: str = Field(..., description="The ID of the customer for whom the prediction was made.")
+    is_high_risk_probability: float = Field(..., description="The predicted probability that the customer is high-risk (between 0 and 1).")
+    is_high_risk_label: int = Field(..., description="The binary prediction label (0 for low-risk, 1 for high-risk).")
+    model_version: str = Field(..., description="The version of the model used for prediction.")
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "customer_id": "C303",
+                "is_high_risk_probability": 0.785,
+                "is_high_risk_label": 1,
+                "model_version": "CreditRiskProxyModel:1"
+            }
+        }
 
